@@ -1,0 +1,23 @@
+# 비밀정보 — 절대 커밋하지 말 것
+.env
+.env.*
+!.env.example
+*token*.txt
+*secret*
+
+# ⚠️ watchlist.csv 는 일부러 여기에 넣지 않았다 — 커밋되어야 하는 파일이다.
+# 10장부터 GitHub Actions 가 저장소에 올라간 watchlist.csv 를 읽어 실행한다.
+# 여기에 추가하면 Actions 가 파일을 찾지 못해 실패한다(9장까지는 내 컴퓨터에서
+# 돌리므로 멀쩡히 지나가고, 10장에 가서야 드러난다).
+# 위 .env 와는 반대다 — .env 는 막고, 값은 Actions Secrets 로 따로 넣는다.
+# 7장부터 압축에 watchlist.example.csv 만 들어가는 것은 별개의 장치다.
+# 자기 종목으로 고친 watchlist.csv 를 그 주 압축이 덮어쓰지 않게 하려는 것이다.
+
+__pycache__/
+*.pyc
+*.docx
+*.pptx
+*.pdf
+*.jpg
+*.jpeg
+*.png
