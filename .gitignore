@@ -1,7 +1,7 @@
 # 비밀정보 — 절대 커밋하지 말 것
 .env
 .env.*
-!.env.example
+.env.example
 *token*.txt
 *secret*
 
