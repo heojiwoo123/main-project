@@ -1,0 +1,1 @@
+dict(zip(watchlist_df["code"], watchlist_df["name"]))

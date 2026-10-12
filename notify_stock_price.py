@@ -1,23 +1,59 @@
 """
-종목 하나의 현재가를 네이버 API로 조회해 텔레그램 메시지로 보내는 스크립트.
+관심종목(watchlist.csv)에 적어 둔 종목들의 현재가를 네이버 API로 한 번에 조회해
+텔레그램 메시지 하나로 보내는 스크립트.
 
-지난주에는 "안녕하세요" 같은 고정된 문구를 보냈지만, 이번 주부터는 **조회해서 얻은 값**을
-메시지에 담아 보낸다. 관심종목을 여러 개로 늘리는 것은 다음에 한다.
+지난주까지는 종목 하나를 코드에 직접 적어 두고 조회했지만, 이번 주부터는 watchlist.csv를
+읽어 그 안의 종목을 차례로 순회한다 — 종목을 늘리거나 줄일 때 코드를 고치지 않고 CSV 파일만
+바꾸면 된다.
 
-`python notify_stock_price.py`로 직접 실행한다.
+send_price_notification()으로 알림 로직 전체를 함수 하나에 감싸 두었다.
+`python notify_stock_price.py`로 직접 실행하면 그 함수가 그대로 실행된다.
 """
 import os
 import time
 import requests
 from dotenv import load_dotenv
 
-# 조회할 종목코드. 지금은 여기 직접 적어 두고, 나중에 파일에서 읽어오도록 바꾼다.
-STOCK_CODE = "005930"  # 삼성전자
+# pandas는 read_watchlist() 안에서 그때그때 import한다.
+# 파일을 열자마자 무거운 패키지를 읽어들이지 않으려는 것이다.
+
+WATCHLIST_FILE = "watchlist.csv"
 
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+
+def read_watchlist(path: str = WATCHLIST_FILE) -> list:
+    """watchlist.csv를 읽어 종목코드 리스트를 반환합니다. 실패 시 None."""
+    if not os.path.exists(path):
+        print(f"❌ '{path}' 파일이 존재하지 않습니다.")
+        return None
+
+    try:
+        import pandas as pd
+
+        # pd.read_csv()는 CSV 파일을 읽어 표 형태의 자료구조인 DataFrame으로 돌려준다.
+        # dtype={"code": str}을 안 주면 pandas가 "005930"을 숫자로 착각해 앞자리 0을
+        # 없애버린다(5930) — 앞자리에 0이 있는 종목코드가 깨지지 않도록 문자열로 강제한다.
+        watchlist_df = pd.read_csv(path, dtype={"code": str})
+
+        # 컬럼명의 공백을 제거하고 소문자로 통일하여 'code' 컬럼을 찾습니다.
+        watchlist_df.columns = [col.strip().lower() for col in watchlist_df.columns]
+
+        if "code" not in watchlist_df.columns:
+            print("❌ CSV 파일에 'code' 컬럼이 존재하지 않습니다.")
+            return None
+
+        # DataFrame의 "code" 열(Series)을 파이썬 기본 리스트로 변환한다.
+        codes = watchlist_df["code"].tolist()
+        print(f"📋 읽어온 관심 종목 리스트: {codes}")
+        return codes
+
+    except Exception as e:
+        print(f"❌ CSV 파일을 읽는 동안 오류가 발생했습니다: {e}")
+        return None
 
 
 def fetch_naver_current_price(code: str, retries: int = 2) -> dict:
@@ -115,18 +151,48 @@ def format_rate_badge(price: int, rate: float) -> str:
     return f"{prefix} ▫️ 0.0%"
 
 
-info = fetch_naver_current_price(STOCK_CODE)
+def send_price_notification() -> bool:
+    """관심종목의 현재가를 텔레그램 메시지 하나로 전송합니다.
 
-if info is None:
-    print("❌ 현재가를 가져오지 못했습니다. 네이버 API 상태를 확인해 주세요.")
-else:
-    # 두 줄짜리 메시지: 첫 줄은 이름과 종목코드, 둘째 줄은 4칸 들여쓴 가격·등락.
-    telegram_message = (
-        f"📈 {info['name']} ({STOCK_CODE})"
-        f"\n    {format_rate_badge(info['price'], info['rate'])}"
-    )
+    한 종목이라도 전송했으면 True, 아무것도 하지 못했으면 False를 반환합니다.
+    """
+    watchlist_codes = read_watchlist()
+    if watchlist_codes is None:
+        return False
+
+    print("🚀 관심종목 현재가 조회 시작...")
+
+    # 메시지는 헤더 한 줄로 시작해, 종목을 하나씩 조회할 때마다 두 줄씩 이어 붙인다.
+    telegram_message = "📊 내 관심종목 현재가\n"
+    found = 0  # 실제로 조회에 성공한 종목 수
+
+    for code in watchlist_codes:
+        info = fetch_naver_current_price(code)
+        if info is None:
+            # 이 종목만 조회 실패해도 프로그램을 멈추지 않고 다음 종목으로 넘어간다.
+            continue
+
+        # 종목마다 두 줄: 첫 줄은 이름과 종목코드, 둘째 줄은 4칸 들여쓴 가격·등락.
+        telegram_message += (
+            f"\n📈 {info['name']} ({code})"
+            f"\n    {format_rate_badge(info['price'], info['rate'])}"
+        )
+        found += 1
+
+    if found == 0:
+        print("❌ 관심종목의 현재가를 하나도 가져오지 못했습니다. 네이버 API 상태를 확인해 주세요.")
+        return False
 
     if send_telegram_message(telegram_message):
-        print("✅ 현재가 메시지를 텔레그램으로 전송했습니다!")
-    else:
-        print("❌ 현재가 메시지 전송에 실패했습니다.")
+        print(f"✅ 현재가 메시지를 텔레그램으로 전송했습니다! ({found}/{len(watchlist_codes)}종목)")
+        return True
+
+    print("❌ 현재가 메시지 전송에 실패했습니다.")
+    return False
+
+
+# if __name__ == "__main__": 은 "이 파일을 직접 실행했을 때만" 아래 코드를 돌리라는 뜻이다.
+# 다른 스크립트가 `from notify_stock_price import send_price_notification`처럼 함수만
+# 가져다 쓰는 경우에는 이 블록이 자동으로 실행되지 않는다.
+if __name__ == "__main__":
+    send_price_notification()
