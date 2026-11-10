@@ -4,8 +4,9 @@
 오늘 분봉(네이버 API로 즉시 조회, 저장하지 않음)으로 추이 그래프를 종목별로 그려 sendPhoto로
 전송한다.
 
-아직 과거 종가를 어디에도 저장해 두지 않으므로, 그래프에 그릴 수 있는 것은 오늘 하루치뿐이다.
-그래서 그래프의 왼쪽이 비어 보인다 — 종가를 매일 쌓아 그 자리를 채우는 일은 다음 주부터 한다.
+이번 주에 collect_daily_close.py가 생겨 종가가 DB에 쌓이기 시작하지만, 이 스크립트는 아직
+그 DB를 읽지 않는다 — 그래서 그래프에는 오늘 하루치만 그려진다. DB에 쌓인 종가를 읽어와
+그래프 왼쪽을 채우는 것은 다음 주에 한다.
 
 send_price_notification()으로 알림 로직 전체를 함수 하나에 감싸 두었다.
 `python notify_stock_price.py`로 직접 실행하면 그 함수가 그대로 실행된다.
@@ -67,8 +68,9 @@ def read_watchlist(path: str = WATCHLIST_FILE) -> list:
 def fetch_naver_current_price(code: str, retries: int = 2) -> dict:
     """네이버 금융 비공식 API로 종목의 현재가(장중) 또는 최근 종가(장마감)를 조회합니다.
 
-    순간적인 네트워크 오류에 대비해 최대 retries회까지 재시도합니다 — 한 번 실패했다고
-    그 종목을 건너뛰면 알림에서 통째로 빠져 버리기 때문입니다.
+    순간적인 네트워크 오류에 대비해 최대 retries회까지 재시도합니다. 특히
+    collect_daily_close.py가 이 함수의 실패를 그대로 "그날 종가 결측"으로 받아들여
+    Turso 히스토리에 되돌릴 수 없는 구멍을 남기기 때문에, 최소한의 재시도로 그 위험을 줄인다.
 
     조회 자체가 실패했을 때뿐 아니라, 응답은 왔지만 가격을 숫자로 읽지 못했을 때(0원)도
     0이 담긴 dict 대신 None을 반환합니다 — 호출부가 "실패"로 명확히 구분할 수 있게.
@@ -76,9 +78,11 @@ def fetch_naver_current_price(code: str, retries: int = 2) -> dict:
     반환 dict에는 가격·등락률·장 개장 여부와 함께 그 가격이 체결된 시각("traded_at")도
     담깁니다 — 조회 시각이 아니라 체결 시각이라 저장할 거래일을 정하는 기준으로 쓸 수 있습니다."""
     url = f"https://m.stock.naver.com/api/stock/{code}/basic"
-    # 왜 재시도가 필요한가: 여기서 실패하면 그 종목은 이번 알림에서 통째로 빠진다. 순간적인
-    # 네트워크 지연이나 일시적인 오류 때문에 그런 일이 생기는 걸 막으려고 최소한의
-    # 재시도(기본 2회)를 넣었다.
+    # 왜 재시도가 필요한가: 이 함수는 notify_stock_price.py(현재가 알림)와 collect_daily_close.py
+    # (종가 기록) 양쪽에서 쓰인다. notify 쪽은 실패해도 다음 알림 때 다시 시도되지만, collect 쪽은
+    # 하루에 한 번만 실행되므로 여기서 실패하면 그날 종가는 영원히 기록되지 않는다(하루 지나면
+    # 재조회할 방법이 없음). 순간적인 네트워크 지연/오류로 이런 영구 결측이 생기는 걸 막기 위해
+    # 최소한의 재시도(기본 2회)를 넣었다.
     for attempt in range(1, retries + 1):
         try:
             # requests.get()으로 이 주소에 HTTP GET 요청을 보낸다. User-Agent 헤더가 없으면 일부
@@ -102,8 +106,8 @@ def fetch_naver_current_price(code: str, retries: int = 2) -> dict:
                 # 와도 int() 변환 중 프로그램이 멈추지 않고 0으로 처리하고 넘어가게 한다.
                 price = int(price_str) if price_str.isdigit() else 0
                 # 0원짜리 결과는 절대 그대로 돌려주지 않는다. 파싱에 실패했을 뿐인데 값이 있는 것처럼
-                # 넘기면 텔레그램에 "0원"이라는 멀쩡해 보이는 가격이 표시되고, 그 값으로 그래프까지
-                # 그려지면 전일 대비 계산이 통째로 깨진다.
+                # 넘기면 텔레그램에 "0원"이라는 멀쩡해 보이는 가격이 표시되고, 그 값이 종가로
+                # 저장되기까지 하면 그래프와 전일 대비 계산이 통째로 깨진다.
                 # 그래서 "조회 실패"와 똑같이 취급해 (재시도 후에도 안 되면) None을 반환하게 만든다.
                 if price <= 0:
                     print(f"❌ [{code}] 가격을 숫자로 읽지 못했습니다 "
@@ -119,8 +123,8 @@ def fetch_naver_current_price(code: str, retries: int = 2) -> dict:
                         # localTradedAt: 네이버가 주는 실제 체결(갱신) 시각. "2026-07-29T16:10:20+09:00"
                         # 형태이고 KST 오프셋(+09:00)까지 붙어 있다. 조회 시각이 아니라 체결 시각이라
                         # 자정을 넘겨 조회해도 그 종목이 마지막으로 거래된 날을 그대로 가리킨다 —
-                        # 나중에 종가를 날짜별로 기록하게 되면, "언제 실행됐는가"가 아니라
-                        # "이 가격이 언제 체결된 것인가"를 기준으로 날짜를 정하는 데 쓴다.
+                        # collect_daily_close.py가 "언제 실행됐는가"가 아니라 "이 가격이 언제 체결된
+                        # 것인가"를 기준으로 날짜를 정하는 데 쓴다.
                         "traded_at": data.get("localTradedAt"),
                     }
         except Exception as e:
@@ -215,8 +219,8 @@ def describe_price_trend(daily_closes: list, intraday_minutes: list) -> str:
     # "최근 0일 종가 + 현재가 추이"라는 이상한 문구가 나온다.
     if daily_closes:
         return f"최근 {len(daily_closes)}일 종가 + 현재가 추이"
-    # 여기까지 왔다면 종가 히스토리가 아직 없는 상태다(과거 종가를 아직 어디에도 쌓아 두지
-    # 않았거나, 새로 추가한 종목이라 쌓인 것이 없는 경우). 분봉이라도 있으면 오늘 하루치
+    # 여기까지 왔다면 종가 히스토리가 아직 없는 상태다(새로 추가한 종목이거나
+    # collect_daily_close.py가 한 번도 실행되지 않은 최초 실행). 분봉이라도 있으면 오늘 하루치
     # 추이는 그려지므로 그렇게 안내한다.
     if intraday_minutes:
         return "오늘 현재가 추이 (종가 히스토리 누적 전)"
@@ -270,9 +274,10 @@ def build_price_chart(daily_closes: list, current_price: int = None,
     """종목별 최근 N일 종가 + 오늘 추이를 선 그래프로 그려 PNG 이미지 버퍼로 반환합니다.
     daily_closes는 [{"date": "YYYYMMDD", "close": 가격}, ...] (날짜 오름차순).
     intraday_minutes를 넘기면(오늘 분봉, 시간 오름차순) 오늘 구간을 분 단위 선으로 그리고,
-    없으면 current_price 한 점만 표시합니다. current_price도 None이면(네이버 API 조회가 실패한
-    경우) "오늘" 지점 없이 daily_closes만으로 그립니다 — 이 경우 daily_closes에 이미 오늘 종가가
-    들어있어도 그대로 표시되어 정보 손실이 없습니다. 반대로 분봉/현재가 조회에 성공하면, daily_closes에 오늘 날짜 종가가
+    없으면 current_price 한 점만 표시합니다. current_price도 None이면(네이버 API 조회가
+    실패한 경우) "오늘" 지점 없이 daily_closes만으로 그립니다 — 이 경우 daily_closes에
+    이미 오늘 종가가 들어있어도(장마감 후 collect_daily_close.py가 실행된 뒤라면) 그대로 표시되어
+    정보 손실이 없습니다. 반대로 분봉/현재가 조회에 성공하면, daily_closes에 오늘 날짜 종가가
     섞여 있어도 제외하고 그립니다 — "오늘" 구간과 중복 표시되는 것을 막기 위해서입니다."""
     import matplotlib
     matplotlib.use("Agg")  # 화면 출력 없이 이미지 파일(버퍼)로만 저장
