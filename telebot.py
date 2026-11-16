@@ -7,10 +7,10 @@
 3. 이 스크립트(telebot.py)를 실행한다.
 4. 출력된 JSON 안에서 message.chat.id 값을 찾아 TELEGRAM_CHAT_ID로 .env에 저장한다.
 
-이후 프로젝트의 다른 스크립트들은 이 값을 직접 찾을 필요 없이 .env에서 읽어온
-TELEGRAM_CHAT_ID를 그대로 재사용한다. getUpdates 응답의 원본 구조를 눈으로 직접
-확인해보는 게 이 스크립트의 목적이라, 다른 스크립트들과 달리 결과를 가공하지 않고
-그대로 출력한다.
+이후 프로젝트의 다른 스크립트들은 이 값을 직접 찾을 필요 없이 stock_utils.py의
+TELEGRAM_CHAT_ID(환경변수에서 이미 읽어온 값)를 그대로 재사용한다. getUpdates 응답의
+원본 구조를 눈으로 직접 확인해보는 게 이 스크립트의 목적이라, stock_utils.py처럼
+결과를 가공하지 않고 그대로 출력한다.
 """
 import json
 import os
